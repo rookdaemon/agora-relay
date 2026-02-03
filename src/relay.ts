@@ -10,6 +10,7 @@ export interface RelayOptions {
 interface ClientMessage {
   type: "register" | "message" | "ping";
   publicKey?: string;
+  name?: string;  // Optional display name (hint only, not authoritative)
   to?: string;
   envelope?: object;
 }
@@ -17,18 +18,24 @@ interface ClientMessage {
 interface RelayMessage {
   type: "registered" | "message" | "error" | "pong" | "peer_online" | "peer_offline" | "peers";
   publicKey?: string;
+  name?: string;  // Optional display name
   from?: string;
   envelope?: object;
   code?: string;
   message?: string;
-  peers?: string[];
+  peers?: Array<{publicKey: string; name?: string}>;
+}
+
+interface ClientInfo {
+  ws: WebSocket;
+  name?: string;
 }
 
 export class Relay extends EventEmitter {
   private options: Required<RelayOptions>;
   private wss: WebSocketServer | null = null;
   private server: http.Server | null = null;
-  private clients: Map<string, WebSocket> = new Map();
+  private clients: Map<string, ClientInfo> = new Map();
 
   constructor(options: RelayOptions) {
     super();
@@ -63,23 +70,26 @@ export class Relay extends EventEmitter {
 
                   // If this pubkey was already connected, close the old connection
                   if (this.clients.has(message.publicKey)) {
-                    const oldWs = this.clients.get(message.publicKey)!;
-                    oldWs.close();
+                    const oldClient = this.clients.get(message.publicKey)!;
+                    oldClient.ws.close();
                   }
 
                   publicKey = message.publicKey;
-                  this.clients.set(publicKey, ws);
+                  const clientName = message.name;
+                  this.clients.set(publicKey, { ws, name: clientName });
 
-                  // Send registered confirmation with list of online peers
-                  const otherPeers = Array.from(this.clients.keys()).filter(k => k !== publicKey);
+                  // Send registered confirmation with list of online peers (including names)
+                  const otherPeers = Array.from(this.clients.entries())
+                    .filter(([k]) => k !== publicKey)
+                    .map(([k, info]) => ({ publicKey: k, name: info.name }));
                   this.sendMessage(ws, {
                     type: "registered",
                     publicKey: publicKey,
                     peers: otherPeers,
                   });
 
-                  // Broadcast peer_online to all other clients
-                  this.broadcast({ type: "peer_online", publicKey }, publicKey);
+                  // Broadcast peer_online to all other clients (include name)
+                  this.broadcast({ type: "peer_online", publicKey, name: clientName }, publicKey);
 
                   this.emit("connection", publicKey);
                   break;
@@ -95,16 +105,18 @@ export class Relay extends EventEmitter {
                     return;
                   }
 
-                  const recipientWs = this.clients.get(message.to);
-                  if (!recipientWs) {
+                  const recipient = this.clients.get(message.to);
+                  if (!recipient) {
                     this.sendError(ws, "unknown_recipient", "Recipient not connected");
                     return;
                   }
 
-                  // Forward the message
-                  this.sendMessage(recipientWs, {
+                  // Forward the message (include sender's name if available)
+                  const senderInfo = this.clients.get(publicKey);
+                  this.sendMessage(recipient.ws, {
                     type: "message",
                     from: publicKey,
+                    name: senderInfo?.name,
                     envelope: message.envelope,
                   });
 
@@ -124,10 +136,11 @@ export class Relay extends EventEmitter {
           });
 
           ws.on("close", () => {
-            if (publicKey && this.clients.get(publicKey) === ws) {
+            const clientInfo = publicKey ? this.clients.get(publicKey) : null;
+            if (publicKey && clientInfo && clientInfo.ws === ws) {
               this.clients.delete(publicKey);
-              // Broadcast peer_offline to all remaining clients
-              this.broadcast({ type: "peer_offline", publicKey });
+              // Broadcast peer_offline to all remaining clients (include name)
+              this.broadcast({ type: "peer_offline", publicKey, name: clientInfo.name });
               this.emit("disconnection", publicKey);
             }
           });
@@ -152,8 +165,8 @@ export class Relay extends EventEmitter {
   async stop(): Promise<void> {
     return new Promise((resolve, reject) => {
       // Close all client connections
-      for (const ws of this.clients.values()) {
-        ws.close();
+      for (const client of this.clients.values()) {
+        client.ws.close();
       }
       this.clients.clear();
 
@@ -191,9 +204,9 @@ export class Relay extends EventEmitter {
   }
 
   private broadcast(message: RelayMessage, excludeKey?: string): void {
-    for (const [key, ws] of this.clients.entries()) {
+    for (const [key, client] of this.clients.entries()) {
       if (key !== excludeKey) {
-        this.sendMessage(ws, message);
+        this.sendMessage(client.ws, message);
       }
     }
   }
