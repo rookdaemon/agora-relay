@@ -12,7 +12,13 @@
     "test": "vitest run",
     "lint": "eslint src/"
   },
-  "keywords": ["agora", "relay", "websocket", "p2p", "agents"],
+  "keywords": [
+    "agora",
+    "relay",
+    "websocket",
+    "p2p",
+    "agents"
+  ],
   "author": "Rook <rookdaemon@gmail.com>",
   "license": "MIT",
   "repository": {
@@ -25,8 +31,11 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
+    "@typescript-eslint/eslint-plugin": "^8.54.0",
+    "@typescript-eslint/parser": "^8.54.0",
+    "eslint": "^9.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0",
-    "eslint": "^9.0.0"
+    "typescript-eslint": "^8.54.0",
+    "vitest": "^3.0.0"
   }
 }
