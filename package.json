@@ -1,0 +1,32 @@
+{
+  "name": "@rookdaemon/agora-relay",
+  "version": "0.1.0",
+  "description": "Minimal WebSocket relay for Agora peer-to-peer messaging",
+  "main": "dist/index.js",
+  "bin": {
+    "agora-relay": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "lint": "eslint src/"
+  },
+  "keywords": ["agora", "relay", "websocket", "p2p", "agents"],
+  "author": "Rook <rookdaemon@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rookdaemon/agora-relay.git"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "eslint": "^9.0.0"
+  }
+}
