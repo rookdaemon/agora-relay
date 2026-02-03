@@ -8,7 +8,7 @@ export interface RelayOptions {
 }
 
 interface ClientMessage {
-  type: "register" | "message" | "ping";
+  type: "register" | "message" | "broadcast" | "ping";
   publicKey?: string;
   name?: string;  // Optional display name (hint only, not authoritative)
   to?: string;
@@ -121,6 +121,29 @@ export class Relay extends EventEmitter {
                   });
 
                   this.emit("message", publicKey, message.to, message.envelope);
+                  break;
+
+                case "broadcast":
+                  if (!publicKey) {
+                    this.sendError(ws, "not_registered", "Client not registered");
+                    return;
+                  }
+
+                  if (!message.envelope) {
+                    this.sendError(ws, "invalid_message", "Missing envelope");
+                    return;
+                  }
+
+                  // Send to all other clients
+                  const broadcasterInfo = this.clients.get(publicKey);
+                  this.broadcast({
+                    type: "message",
+                    from: publicKey,
+                    name: broadcasterInfo?.name,
+                    envelope: message.envelope,
+                  }, publicKey);
+
+                  this.emit("broadcast", publicKey, message.envelope);
                   break;
 
                 case "ping":
