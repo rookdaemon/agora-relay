@@ -1,0 +1,14 @@
+[Unit]
+Description=Agora Relay WebSocket Server
+After=network.target
+
+[Service]
+Type=simple
+User=rook
+WorkingDirectory=/home/rook/agora-relay
+ExecStart=/usr/bin/node /home/rook/agora-relay/dist/cli.js --port 9470
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

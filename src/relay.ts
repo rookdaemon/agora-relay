@@ -15,12 +15,13 @@ interface ClientMessage {
 }
 
 interface RelayMessage {
-  type: "registered" | "message" | "error" | "pong";
+  type: "registered" | "message" | "error" | "pong" | "peer_online" | "peer_offline" | "peers";
   publicKey?: string;
   from?: string;
   envelope?: object;
   code?: string;
   message?: string;
+  peers?: string[];
 }
 
 export class Relay extends EventEmitter {
@@ -69,11 +70,16 @@ export class Relay extends EventEmitter {
                   publicKey = message.publicKey;
                   this.clients.set(publicKey, ws);
 
-                  // Send registered confirmation
+                  // Send registered confirmation with list of online peers
+                  const otherPeers = Array.from(this.clients.keys()).filter(k => k !== publicKey);
                   this.sendMessage(ws, {
                     type: "registered",
                     publicKey: publicKey,
+                    peers: otherPeers,
                   });
+
+                  // Broadcast peer_online to all other clients
+                  this.broadcast({ type: "peer_online", publicKey }, publicKey);
 
                   this.emit("connection", publicKey);
                   break;
@@ -120,6 +126,8 @@ export class Relay extends EventEmitter {
           ws.on("close", () => {
             if (publicKey && this.clients.get(publicKey) === ws) {
               this.clients.delete(publicKey);
+              // Broadcast peer_offline to all remaining clients
+              this.broadcast({ type: "peer_offline", publicKey });
               this.emit("disconnection", publicKey);
             }
           });
@@ -179,6 +187,14 @@ export class Relay extends EventEmitter {
   private sendMessage(ws: WebSocket, message: RelayMessage): void {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(message));
+    }
+  }
+
+  private broadcast(message: RelayMessage, excludeKey?: string): void {
+    for (const [key, ws] of this.clients.entries()) {
+      if (key !== excludeKey) {
+        this.sendMessage(ws, message);
+      }
     }
   }
 
