@@ -75,7 +75,10 @@ export class Relay extends EventEmitter {
                   }
 
                   publicKey = message.publicKey;
-                  const clientName = message.name;
+                  // Never treat the short key (id) as a display name; leave name undefined
+                  const rawName = message.name;
+                  const clientName =
+                    rawName && !/^\.\.\.[a-f0-9]{8}$/i.test(rawName.trim()) ? rawName : undefined;
                   this.clients.set(publicKey, { ws, name: clientName });
 
                   // Send registered confirmation with list of online peers (including names)

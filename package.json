@@ -1,6 +1,6 @@
 {
   "name": "@rookdaemon/agora-relay",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Minimal WebSocket relay for Agora peer-to-peer messaging",
   "main": "dist/index.js",
   "bin": {
