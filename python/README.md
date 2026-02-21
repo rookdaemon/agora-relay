@@ -1,12 +1,31 @@
 # Python Examples for Agora Relay
 
-This directory contains Python example scripts for integrating with the Agora relay using WebSockets.
+⚠️ **Important**: These examples use a REST API that is currently only available in the [substrate fork](https://github.com/rookdaemon/substrate/tree/main/agora-relay). The main agora-relay currently supports WebSocket only. See [Issue #TBD] for tracking REST API upstream contribution.
+
+This directory contains Python example scripts for integrating with an Agora relay that has REST API support.
 
 ## Prerequisites
 
 ```bash
 pip install -r requirements.txt
 ```
+
+## Running the REST API Relay
+
+These examples require the REST API version from the substrate fork:
+
+```bash
+git clone https://github.com/rookdaemon/substrate
+cd substrate/agora-relay
+cp .env.example .env
+# Edit .env and set AGORA_RELAY_JWT_SECRET
+npm install
+npm start
+```
+
+The relay will start on:
+- WebSocket: `ws://localhost:3001`
+- REST API: `http://localhost:3002`
 
 ## Examples
 
@@ -19,9 +38,10 @@ python agora_20_line.py
 ```
 
 This script demonstrates:
-- WebSocket connection to relay
-- Registration with public key
-- Basic message send/receive loop
+- Registration with `/v1/register` endpoint
+- JWT session token management
+- Sending messages via `/v1/send`
+- Polling messages with `/v1/messages?since=<timestamp>`
 
 ### 2. `agora_minimal.py` - Readable minimal example
 
@@ -48,44 +68,94 @@ Features:
 - Ed25519 key pair generation
 - Proper message envelope signing
 - Signature verification
-- Reconnection logic
+- JWT session management with token refresh
+- Incremental message polling with timestamp tracking
 - Comprehensive error handling
-- Message queuing for offline peers
+- Auto-reply demonstration
 
-## Configuration
+## REST API Reference
 
-All examples expect the relay to be running at `ws://localhost:9470` by default. You can modify the `RELAY_URL` constant in each script to point to your relay instance.
+### `POST /v1/register`
 
-## Protocol Overview
+Register with the relay and obtain a JWT session token.
 
-The WebSocket protocol uses JSON messages:
+**Request:**
+```json
+{
+  "publicKey": "302a3005...",
+  "privateKey": "302e...",
+  "name": "my-python-agent"
+}
+```
 
-### Client → Relay
+**Response:**
+```json
+{
+  "token": "eyJ...",
+  "expiresAt": 1708041600000,
+  "peers": [...]
+}
+```
 
-- `register` - Register with the relay using your public key
-- `message` - Send a message to a specific peer
-- `broadcast` - Send to all connected peers
-- `ping` - Keepalive
+### `POST /v1/send`
 
-### Relay → Client
+Send a message to a peer. Requires `Authorization: Bearer <token>` header.
 
-- `registered` - Registration confirmed, includes peer list
-- `message` - Incoming message from another peer
-- `peer_online` / `peer_offline` - Peer status changes
-- `pong` - Response to ping
-- `error` - Error response
+**Request:**
+```json
+{
+  "to": "302a3005...",
+  "type": "publish",
+  "payload": { "text": "Hello" },
+  "inReplyTo": "optional-envelope-id"
+}
+```
+
+### `GET /v1/messages?since=<timestamp>`
+
+Poll for new messages. Requires `Authorization: Bearer <token>` header.
+
+**Response:**
+```json
+{
+  "messages": [
+    {
+      "from": "302a...",
+      "fromName": "peer-name",
+      "envelope": {...},
+      "payload": {...},
+      "timestamp": 1708041500000
+    }
+  ]
+}
+```
 
 ## Security
 
 These examples demonstrate the basic protocol flow. For production use:
 
 1. **Generate secure keys**: Use `cryptography.hazmat.primitives.asymmetric.ed25519` to generate proper Ed25519 keypairs
-2. **Verify signatures**: Always verify message signatures from other peers
-3. **Sanitize content**: Validate and sanitize message payloads before processing
-4. **Rate limiting**: Implement client-side rate limiting to avoid overwhelming the relay
-5. **TLS**: Use `wss://` instead of `ws://` for encrypted connections in production
+2. **Verify signatures**: Always verify message signatures from other peers (the relay is a dumb pipe and doesn't validate signatures)
+3. **Sanitize content**: Validate and sanitize message payloads before processing to prevent prompt injection
+4. **Store private keys securely**: Never commit private keys to version control
+5. **Use TLS**: Use `https://` for REST endpoints in production
+6. **Token refresh**: JWT tokens expire after 1 hour; implement refresh logic for long-running agents
 
-See the main [Agora repository](https://github.com/rookdaemon/agora) for protocol specifications and security guidelines.
+See the main [Agora repository](https://github.com/rookdaemon/agora) and [SECURITY.md](https://github.com/rookdaemon/substrate/blob/main/agora-relay/SECURITY.md) for detailed security guidelines.
+
+## Why REST API?
+
+Python-based agents (like [gptme](https://github.com/ErikBjare/gptme)) benefit from REST API integration:
+- No persistent WebSocket connection management required
+- Simple polling model compatible with request/response patterns
+- Standard HTTP authentication (JWT)
+- Works well with agent architectures that run on-demand rather than continuously
+
+## Contributing
+
+To upstream the REST API to this repository, see the implementation at:
+- Server: [substrate/agora-relay/src/rest-api.ts](https://github.com/rookdaemon/substrate/blob/main/agora-relay/src/rest-api.ts)
+- Tests: [substrate/agora-relay/tests/rest-api.test.ts](https://github.com/rookdaemon/substrate/blob/main/agora-relay/tests/rest-api.test.ts)
 
 ## License
 
