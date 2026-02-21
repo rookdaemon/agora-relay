@@ -518,3 +518,103 @@ describe("Relay with file-backed storage", () => {
     sender.close();
   });
 });
+
+describe("loadConfig", () => {
+  let tmpDir: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agora-config-test-"));
+    origCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(origCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("should return defaults when no .env or peers.json", async () => {
+    const { loadConfig, AGORA_HOME } = await import("./config.js");
+    const config = loadConfig();
+    expect(config.port).toBe(9470);
+    expect(config.host).toBe("0.0.0.0");
+    expect(config.storageDir).toBe(path.join(AGORA_HOME, "storage"));
+    expect(config.storagePeers).toEqual([]);
+  });
+
+  it("should read port, host, storageDir from .env", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, ".env"),
+      "AGORA_PORT=8080\nAGORA_HOST=127.0.0.1\nAGORA_STORAGE_DIR=/tmp/relay-store\n"
+    );
+    // Re-import to pick up new CWD
+    const { loadConfig } = await import("./config.js?port-host-dir");
+    const config = loadConfig();
+    expect(config.port).toBe(8080);
+    expect(config.host).toBe("127.0.0.1");
+    expect(config.storageDir).toBe("/tmp/relay-store");
+  });
+
+  it("should parse AGORA_STORAGE_PEERS from .env", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, ".env"),
+      "AGORA_STORAGE_PEERS=key1,key2,key3\n"
+    );
+    const { loadConfig } = await import("./config.js?peers-env");
+    const config = loadConfig();
+    expect(config.storagePeers).toEqual(["key1", "key2", "key3"]);
+  });
+
+  it("should load peers from peers.json when present", async () => {
+    const agoraHome = path.join(os.homedir(), ".agora-relay");
+    const peersFile = path.join(agoraHome, "peers.json");
+    const existed = fs.existsSync(peersFile);
+    const backup = existed ? fs.readFileSync(peersFile) : null;
+
+    try {
+      fs.mkdirSync(agoraHome, { recursive: true });
+      fs.writeFileSync(peersFile, JSON.stringify(["peerA", "peerB"]));
+      const { loadConfig } = await import("./config.js?peers-json");
+      const config = loadConfig();
+      expect(config.storagePeers).toContain("peerA");
+      expect(config.storagePeers).toContain("peerB");
+    } finally {
+      if (backup !== null) {
+        fs.writeFileSync(peersFile, backup);
+      } else if (fs.existsSync(peersFile)) {
+        fs.unlinkSync(peersFile);
+      }
+    }
+  });
+
+  it("should expand ~/ in AGORA_STORAGE_DIR", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, ".env"),
+      "AGORA_STORAGE_DIR=~/my-store\n"
+    );
+    const { loadConfig } = await import("./config.js?expand-home");
+    const config = loadConfig();
+    expect(config.storageDir).toBe(path.join(os.homedir(), "my-store"));
+  });
+
+  it("should ignore .env comment lines and blank lines", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, ".env"),
+      "# This is a comment\n\nAGORA_PORT=7777\n"
+    );
+    const { loadConfig } = await import("./config.js?comments");
+    const config = loadConfig();
+    expect(config.port).toBe(7777);
+  });
+
+  it("should strip surrounding quotes from .env values", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, ".env"),
+      'AGORA_HOST="192.168.1.1"\n'
+    );
+    const { loadConfig } = await import('./config.js?quotes');
+    const config = loadConfig();
+    expect(config.host).toBe("192.168.1.1");
+  });
+});
