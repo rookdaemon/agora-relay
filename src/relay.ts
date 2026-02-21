@@ -96,6 +96,12 @@ export class Relay extends EventEmitter {
                   const otherPeers = Array.from(this.clients.entries())
                     .filter(([k]) => k !== publicKey)
                     .map(([k, info]) => ({ publicKey: k, name: info.name }));
+                  // Storage-enabled peers are always considered connected (store-and-forward)
+                  for (const storagePeer of this.options.storagePeers) {
+                    if (storagePeer !== publicKey && !this.clients.has(storagePeer)) {
+                      otherPeers.push({ publicKey: storagePeer, name: undefined });
+                    }
+                  }
                   this.sendMessage(ws, {
                     type: "registered",
                     publicKey: publicKey,
@@ -203,8 +209,10 @@ export class Relay extends EventEmitter {
             const clientInfo = publicKey ? this.clients.get(publicKey) : null;
             if (publicKey && clientInfo && clientInfo.ws === ws) {
               this.clients.delete(publicKey);
-              // Broadcast peer_offline to all remaining clients (include name)
-              this.broadcast({ type: "peer_offline", publicKey, name: clientInfo.name });
+              // Storage-enabled peers are always considered connected; skip peer_offline for them
+              if (!this.options.storagePeers.includes(publicKey)) {
+                this.broadcast({ type: "peer_offline", publicKey, name: clientInfo.name });
+              }
               this.emit("disconnection", publicKey);
             }
           });

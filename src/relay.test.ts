@@ -490,6 +490,64 @@ describe("Relay with file-backed storage", () => {
     alice.close();
   });
 
+  it("should include storage-enabled offline peers in the registered peers list", async () => {
+    // "alice" is a storagePeer but not connected; "bob" connects and should see "alice" in peers
+    const bob = new WebSocket(`ws://localhost:${testPort}`);
+    await new Promise<void>((resolve) => bob.on("open", resolve));
+
+    const registeredMsg = new Promise<any>((resolve) => {
+      bob.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === "registered") resolve(msg);
+      });
+    });
+    bob.send(JSON.stringify({ type: "register", publicKey: "bob" }));
+
+    const msg = await registeredMsg;
+    const peerKeys = msg.peers.map((p: any) => p.publicKey);
+    expect(peerKeys).toContain("alice");
+
+    bob.close();
+  });
+
+  it("should not broadcast peer_offline when a storage-enabled peer disconnects", async () => {
+    // Connect alice (storage peer) and bob
+    const alice = new WebSocket(`ws://localhost:${testPort}`);
+    const bob = new WebSocket(`ws://localhost:${testPort}`);
+    await Promise.all([
+      new Promise<void>((resolve) => alice.on("open", resolve)),
+      new Promise<void>((resolve) => bob.on("open", resolve)),
+    ]);
+
+    const aliceReady = new Promise<void>((resolve) => {
+      alice.on("message", (data) => {
+        if (JSON.parse(data.toString()).type === "registered") resolve();
+      });
+    });
+    alice.send(JSON.stringify({ type: "register", publicKey: "alice" }));
+    await aliceReady;
+
+    const bobReady = new Promise<void>((resolve) => {
+      bob.on("message", (data) => {
+        if (JSON.parse(data.toString()).type === "registered") resolve();
+      });
+    });
+    bob.send(JSON.stringify({ type: "register", publicKey: "bob" }));
+    await bobReady;
+
+    // Collect messages received by bob after alice disconnects
+    const bobReceived: any[] = [];
+    bob.on("message", (data) => bobReceived.push(JSON.parse(data.toString())));
+
+    alice.close();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const offlineEvents = bobReceived.filter((m) => m.type === "peer_offline");
+    expect(offlineEvents).toHaveLength(0);
+
+    bob.close();
+  });
+
   it("should still return error for non-storage-enabled offline peers", async () => {
     const sender = new WebSocket(`ws://localhost:${testPort}`);
     await new Promise<void>((resolve) => sender.on("open", resolve));
