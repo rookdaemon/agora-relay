@@ -23,6 +23,7 @@ interface ClientMessage {
 interface RelayMessage {
   type: "registered" | "message" | "error" | "pong" | "peer_online" | "peer_offline" | "peers";
   publicKey?: string;
+  sessionId?: string;
   name?: string;  // Optional display name
   from?: string;
   envelope?: object;
@@ -40,7 +41,8 @@ export class Relay extends EventEmitter {
   private options: Required<RelayOptions>;
   private wss: WebSocketServer | null = null;
   private server: http.Server | null = null;
-  private clients: Map<string, ClientInfo> = new Map();
+  /** publicKey -> (sessionId -> ClientInfo) */
+  private sessions: Map<string, Map<string, ClientInfo>> = new Map();
   private store: MessageStore | null = null;
 
   constructor(options: RelayOptions) {
@@ -67,6 +69,7 @@ export class Relay extends EventEmitter {
 
         this.wss.on("connection", (ws: WebSocket) => {
           let publicKey: string | null = null;
+          let sessionId: string | null = null;
 
           ws.on("message", (data: Buffer) => {
             try {
@@ -79,37 +82,44 @@ export class Relay extends EventEmitter {
                     return;
                   }
 
-                  // If this pubkey was already connected, close the old connection
-                  if (this.clients.has(message.publicKey)) {
-                    const oldClient = this.clients.get(message.publicKey)!;
-                    oldClient.ws.close();
-                  }
-
                   publicKey = message.publicKey;
+                  sessionId = crypto.randomUUID();
                   // Never treat the short key (id) as a display name; leave name undefined
                   const rawName = message.name;
                   const clientName =
                     rawName && !/^\.\.\.[a-f0-9]{8}$/i.test(rawName.trim()) ? rawName : undefined;
-                  this.clients.set(publicKey, { ws, name: clientName });
 
-                  // Send registered confirmation with list of online peers (including names)
-                  const otherPeers = Array.from(this.clients.entries())
+                  // Add this session to the sessions map (create inner map if needed)
+                  if (!this.sessions.has(publicKey)) {
+                    this.sessions.set(publicKey, new Map());
+                  }
+                  this.sessions.get(publicKey)!.set(sessionId, { ws, name: clientName });
+                  const isFirstSession = this.sessions.get(publicKey)!.size === 1;
+
+                  // Send registered confirmation with session ID and list of online peers (including names)
+                  const otherPeers = Array.from(this.sessions.entries())
                     .filter(([k]) => k !== publicKey)
-                    .map(([k, info]) => ({ publicKey: k, name: info.name }));
+                    .map(([k, sessionMap]) => {
+                      const info = sessionMap.values().next().value as ClientInfo;
+                      return { publicKey: k, name: info?.name };
+                    });
                   // Storage-enabled peers are always considered connected (store-and-forward)
                   for (const storagePeer of this.options.storagePeers) {
-                    if (storagePeer !== publicKey && !this.clients.has(storagePeer)) {
+                    if (storagePeer !== publicKey && !this.sessions.has(storagePeer)) {
                       otherPeers.push({ publicKey: storagePeer, name: undefined });
                     }
                   }
                   this.sendMessage(ws, {
                     type: "registered",
                     publicKey: publicKey,
+                    sessionId: sessionId,
                     peers: otherPeers,
                   });
 
-                  // Broadcast peer_online to all other clients (include name)
-                  this.broadcast({ type: "peer_online", publicKey, name: clientName }, publicKey);
+                  // Broadcast peer_online only when this is the first session for this peer
+                  if (isFirstSession) {
+                    this.broadcast({ type: "peer_online", publicKey, name: clientName }, publicKey);
+                  }
 
                   // Deliver any stored messages for this peer
                   if (this.store && this.options.storagePeers.includes(publicKey)) {
@@ -141,11 +151,11 @@ export class Relay extends EventEmitter {
                     return;
                   }
 
-                  const recipient = this.clients.get(message.to);
-                  if (!recipient) {
+                  const recipientSessions = this.sessions.get(message.to);
+                  if (!recipientSessions || recipientSessions.size === 0) {
                     // If the recipient is a storage-enabled peer, queue the message
                     if (this.store && this.options.storagePeers.includes(message.to)) {
-                      const senderInfoOffline = this.clients.get(publicKey);
+                      const senderInfoOffline = this.getClientInfo(publicKey);
                       this.store.save(message.to, {
                         from: publicKey,
                         name: senderInfoOffline?.name,
@@ -158,14 +168,16 @@ export class Relay extends EventEmitter {
                     return;
                   }
 
-                  // Forward the message (include sender's name if available)
-                  const senderInfo = this.clients.get(publicKey);
-                  this.sendMessage(recipient.ws, {
-                    type: "message",
-                    from: publicKey,
-                    name: senderInfo?.name,
-                    envelope: message.envelope,
-                  });
+                  // Forward the message to ALL sessions of the recipient
+                  const senderInfo = this.getClientInfo(publicKey);
+                  for (const recipientSession of recipientSessions.values()) {
+                    this.sendMessage(recipientSession.ws, {
+                      type: "message",
+                      from: publicKey,
+                      name: senderInfo?.name,
+                      envelope: message.envelope,
+                    });
+                  }
 
                   this.emit("message", publicKey, message.to, message.envelope);
                   break;
@@ -181,8 +193,8 @@ export class Relay extends EventEmitter {
                     return;
                   }
 
-                  // Send to all other clients
-                  const broadcasterInfo = this.clients.get(publicKey);
+                  // Send to all other clients (all sessions of all other peers)
+                  const broadcasterInfo = this.getClientInfo(publicKey);
                   this.broadcast({
                     type: "message",
                     from: publicKey,
@@ -206,14 +218,22 @@ export class Relay extends EventEmitter {
           });
 
           ws.on("close", () => {
-            const clientInfo = publicKey ? this.clients.get(publicKey) : null;
-            if (publicKey && clientInfo && clientInfo.ws === ws) {
-              this.clients.delete(publicKey);
-              // Storage-enabled peers are always considered connected; skip peer_offline for them
-              if (!this.options.storagePeers.includes(publicKey)) {
-                this.broadcast({ type: "peer_offline", publicKey, name: clientInfo.name });
+            if (publicKey && sessionId) {
+              const peerSessions = this.sessions.get(publicKey);
+              if (peerSessions) {
+                const clientInfo = peerSessions.get(sessionId);
+                if (clientInfo && clientInfo.ws === ws) {
+                  peerSessions.delete(sessionId);
+                  if (peerSessions.size === 0) {
+                    this.sessions.delete(publicKey);
+                    // Storage-enabled peers are always considered connected; skip peer_offline for them
+                    if (!this.options.storagePeers.includes(publicKey)) {
+                      this.broadcast({ type: "peer_offline", publicKey, name: clientInfo.name });
+                    }
+                  }
+                  this.emit("disconnection", publicKey);
+                }
               }
-              this.emit("disconnection", publicKey);
             }
           });
 
@@ -237,10 +257,12 @@ export class Relay extends EventEmitter {
   async stop(): Promise<void> {
     return new Promise((resolve, reject) => {
       // Close all client connections
-      for (const client of this.clients.values()) {
-        client.ws.close();
+      for (const sessionMap of this.sessions.values()) {
+        for (const client of sessionMap.values()) {
+          client.ws.close();
+        }
       }
-      this.clients.clear();
+      this.sessions.clear();
 
       // Close WebSocket server
       if (this.wss) {
@@ -275,10 +297,18 @@ export class Relay extends EventEmitter {
     }
   }
 
+  /** Returns the ClientInfo for any active session of the given peer, or undefined if none. */
+  private getClientInfo(publicKey: string): ClientInfo | undefined {
+    const sessionMap = this.sessions.get(publicKey);
+    return sessionMap?.values().next().value as ClientInfo | undefined;
+  }
+
   private broadcast(message: RelayMessage, excludeKey?: string): void {
-    for (const [key, client] of this.clients.entries()) {
+    for (const [key, sessionMap] of this.sessions.entries()) {
       if (key !== excludeKey) {
-        this.sendMessage(client.ws, message);
+        for (const client of sessionMap.values()) {
+          this.sendMessage(client.ws, message);
+        }
       }
     }
   }
