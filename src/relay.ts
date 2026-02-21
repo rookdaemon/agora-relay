@@ -1,10 +1,15 @@
 import { EventEmitter } from "events";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "http";
+import { MessageStore } from "./store.js";
 
 export interface RelayOptions {
   port: number;
   host?: string;
+  /** Public keys whose messages should be stored when they are offline */
+  storagePeers?: string[];
+  /** Directory used to persist messages for offline peers */
+  storageDir?: string;
 }
 
 interface ClientMessage {
@@ -36,13 +41,19 @@ export class Relay extends EventEmitter {
   private wss: WebSocketServer | null = null;
   private server: http.Server | null = null;
   private clients: Map<string, ClientInfo> = new Map();
+  private store: MessageStore | null = null;
 
   constructor(options: RelayOptions) {
     super();
     this.options = {
       port: options.port,
       host: options.host || "0.0.0.0",
+      storagePeers: options.storagePeers || [],
+      storageDir: options.storageDir || "",
     };
+    if (this.options.storagePeers.length > 0 && this.options.storageDir) {
+      this.store = new MessageStore(this.options.storageDir);
+    }
   }
 
   async start(): Promise<void> {
@@ -94,6 +105,22 @@ export class Relay extends EventEmitter {
                   // Broadcast peer_online to all other clients (include name)
                   this.broadcast({ type: "peer_online", publicKey, name: clientName }, publicKey);
 
+                  // Deliver any stored messages for this peer
+                  if (this.store && this.options.storagePeers.includes(publicKey)) {
+                    const queued = this.store.load(publicKey);
+                    if (queued.length > 0) {
+                      for (const msg of queued) {
+                        this.sendMessage(ws, {
+                          type: "message",
+                          from: msg.from,
+                          name: msg.name,
+                          envelope: msg.envelope,
+                        });
+                      }
+                      this.store.clear(publicKey);
+                    }
+                  }
+
                   this.emit("connection", publicKey);
                   break;
 
@@ -110,7 +137,18 @@ export class Relay extends EventEmitter {
 
                   const recipient = this.clients.get(message.to);
                   if (!recipient) {
-                    this.sendError(ws, "unknown_recipient", "Recipient not connected");
+                    // If the recipient is a storage-enabled peer, queue the message
+                    if (this.store && this.options.storagePeers.includes(message.to)) {
+                      const senderInfoOffline = this.clients.get(publicKey);
+                      this.store.save(message.to, {
+                        from: publicKey,
+                        name: senderInfoOffline?.name,
+                        envelope: message.envelope,
+                      });
+                      this.emit("message", publicKey, message.to, message.envelope);
+                    } else {
+                      this.sendError(ws, "unknown_recipient", "Recipient not connected");
+                    }
                     return;
                   }
 
