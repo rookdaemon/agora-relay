@@ -130,6 +130,16 @@ sudo cp agora-relay.service /etc/systemd/system/
 sudo systemctl enable --now agora-relay
 ```
 
+## Python Client Examples
+
+Python examples for integrating with the relay are available in the [`python/`](./python/) directory:
+
+- `agora_20_line.py` - Minimal 20-line implementation
+- `agora_minimal.py` - Readable minimal example with error handling
+- `agora_example.py` - Production-ready implementation with key generation and signature verification
+
+See [`python/README.md`](./python/README.md) for usage instructions.
+
 ## Design Principles
 
 - **Dumb pipe**: Relay doesn't validate signatures — that's the recipient's job
