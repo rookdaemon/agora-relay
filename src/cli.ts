@@ -1,23 +1,41 @@
 #!/usr/bin/env node
 
 import { Relay } from "./relay.js";
+import { loadConfig } from "./config.js";
 
-function parseArgs(): { port: number; host: string } {
+interface CliArgs {
+  port?: number;
+  host?: string;
+  storageDir?: string;
+  storagePeers?: string[];
+}
+
+function parseArgs(): CliArgs {
   const args = process.argv.slice(2);
-  let port = 9470;
-  let host = "0.0.0.0";
+  const result: CliArgs = {};
+  const extraPeers: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--port" && i + 1 < args.length) {
-      port = parseInt(args[i + 1], 10);
+      result.port = parseInt(args[i + 1], 10);
       i++;
     } else if (args[i] === "--host" && i + 1 < args.length) {
-      host = args[i + 1];
+      result.host = args[i + 1];
+      i++;
+    } else if (args[i] === "--storage-dir" && i + 1 < args.length) {
+      result.storageDir = args[i + 1];
+      i++;
+    } else if (args[i] === "--storage-peers" && i + 1 < args.length) {
+      extraPeers.push(
+        ...args[i + 1].split(",").map((k) => k.trim()).filter(Boolean)
+      );
       i++;
     }
   }
 
-  return { port, host };
+  if (extraPeers.length > 0) result.storagePeers = extraPeers;
+
+  return result;
 }
 
 function truncateKey(key: string): string {
@@ -26,9 +44,19 @@ function truncateKey(key: string): string {
 }
 
 async function main() {
-  const { port, host } = parseArgs();
+  // Load base config from .env (CWD) and ~/.agora-relay/peers.json
+  const fileConfig = loadConfig();
+  const cliArgs = parseArgs();
 
-  const relay = new Relay({ port, host });
+  // CLI args override file config for scalar values; peers are unioned
+  const port = cliArgs.port ?? fileConfig.port;
+  const host = cliArgs.host ?? fileConfig.host;
+  const storageDir = cliArgs.storageDir ?? fileConfig.storageDir;
+  const storagePeers = [
+    ...new Set([...fileConfig.storagePeers, ...(cliArgs.storagePeers || [])]),
+  ];
+
+  const relay = new Relay({ port, host, storageDir, storagePeers });
 
   relay.on("connection", (publicKey: string) => {
     console.log(`[CONNECT] ${truncateKey(publicKey)}`);

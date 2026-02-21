@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Relay } from "./relay.js";
+import { MessageStore } from "./store.js";
 import WebSocket from "ws";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 
 describe("Relay", () => {
   let relay: Relay;
@@ -350,5 +354,267 @@ describe("Relay", () => {
     expect(error.code).toBe("invalid_message");
 
     ws.close();
+  });
+});
+
+describe("MessageStore", () => {
+  let storageDir: string;
+
+  beforeEach(() => {
+    storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "agora-relay-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(storageDir, { recursive: true, force: true });
+  });
+
+  it("should save and load messages for a recipient", () => {
+    const store = new MessageStore(storageDir);
+    store.save("alice", { from: "bob", envelope: { data: "hello" } });
+    const messages = store.load("alice");
+    expect(messages).toHaveLength(1);
+    expect(messages[0].from).toBe("bob");
+    expect(messages[0].envelope).toEqual({ data: "hello" });
+  });
+
+  it("should return empty array when no messages stored", () => {
+    const store = new MessageStore(storageDir);
+    expect(store.load("nobody")).toEqual([]);
+  });
+
+  it("should clear stored messages after delivery", () => {
+    const store = new MessageStore(storageDir);
+    store.save("alice", { from: "bob", envelope: { data: "hello" } });
+    store.clear("alice");
+    expect(store.load("alice")).toEqual([]);
+  });
+
+  it("should preserve message order (FIFO)", async () => {
+    const store = new MessageStore(storageDir);
+    store.save("alice", { from: "bob", envelope: { seq: 1 } });
+    // Small delay to ensure distinct timestamps
+    await new Promise((r) => setTimeout(r, 5));
+    store.save("alice", { from: "bob", envelope: { seq: 2 } });
+    const messages = store.load("alice");
+    expect(messages).toHaveLength(2);
+    expect((messages[0].envelope as any).seq).toBe(1);
+    expect((messages[1].envelope as any).seq).toBe(2);
+  });
+});
+
+describe("Relay with file-backed storage", () => {
+  let relay: Relay;
+  let storageDir: string;
+  const testPort = 9472;
+
+  beforeEach(async () => {
+    storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "agora-relay-test-"));
+    relay = new Relay({ port: testPort, storagePeers: ["alice"], storageDir });
+    await relay.start();
+  });
+
+  afterEach(async () => {
+    await relay.stop();
+    fs.rmSync(storageDir, { recursive: true, force: true });
+  });
+
+  it("should queue message for storage-enabled offline peer without error", async () => {
+    const sender = new WebSocket(`ws://localhost:${testPort}`);
+    await new Promise<void>((resolve) => sender.on("open", resolve));
+
+    const registerPromise = new Promise<void>((resolve) => {
+      sender.on("message", (data) => {
+        if (JSON.parse(data.toString()).type === "registered") resolve();
+      });
+    });
+    sender.send(JSON.stringify({ type: "register", publicKey: "bob" }));
+    await registerPromise;
+
+    // Collect all messages from sender (should not contain an error)
+    const received: any[] = [];
+    sender.on("message", (data) => received.push(JSON.parse(data.toString())));
+
+    const envelope = { text: "offline message" };
+    sender.send(JSON.stringify({ type: "message", to: "alice", envelope }));
+
+    // Brief pause to allow any error response
+    await new Promise((r) => setTimeout(r, 100));
+
+    const errors = received.filter((m) => m.type === "error");
+    expect(errors).toHaveLength(0);
+
+    sender.close();
+  });
+
+  it("should deliver queued messages when storage-enabled peer reconnects", async () => {
+    const sender = new WebSocket(`ws://localhost:${testPort}`);
+    await new Promise<void>((resolve) => sender.on("open", resolve));
+
+    const senderReady = new Promise<void>((resolve) => {
+      sender.on("message", (data) => {
+        if (JSON.parse(data.toString()).type === "registered") resolve();
+      });
+    });
+    sender.send(JSON.stringify({ type: "register", publicKey: "bob" }));
+    await senderReady;
+
+    // alice is offline — send a message to her
+    const envelope = { text: "stored for alice" };
+    sender.send(JSON.stringify({ type: "message", to: "alice", envelope }));
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Now alice comes online
+    const alice = new WebSocket(`ws://localhost:${testPort}`);
+    await new Promise<void>((resolve) => alice.on("open", resolve));
+
+    const aliceMessages: any[] = [];
+    const aliceReady = new Promise<void>((resolve) => {
+      alice.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        aliceMessages.push(msg);
+        if (msg.type === "registered") resolve();
+      });
+    });
+    alice.send(JSON.stringify({ type: "register", publicKey: "alice" }));
+    await aliceReady;
+
+    // Allow time for queued messages to be delivered
+    await new Promise((r) => setTimeout(r, 100));
+
+    const delivered = aliceMessages.filter((m) => m.type === "message");
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].from).toBe("bob");
+    expect(delivered[0].envelope).toEqual(envelope);
+
+    sender.close();
+    alice.close();
+  });
+
+  it("should still return error for non-storage-enabled offline peers", async () => {
+    const sender = new WebSocket(`ws://localhost:${testPort}`);
+    await new Promise<void>((resolve) => sender.on("open", resolve));
+
+    const registerPromise = new Promise<void>((resolve) => {
+      sender.on("message", (data) => {
+        if (JSON.parse(data.toString()).type === "registered") resolve();
+      });
+    });
+    sender.send(JSON.stringify({ type: "register", publicKey: "bob" }));
+    await registerPromise;
+
+    const errorPromise = new Promise<any>((resolve) => {
+      sender.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === "error") resolve(msg);
+      });
+    });
+
+    // "charlie" is not in storagePeers
+    sender.send(JSON.stringify({ type: "message", to: "charlie", envelope: { x: 1 } }));
+
+    const error = await errorPromise;
+    expect(error.code).toBe("unknown_recipient");
+
+    sender.close();
+  });
+});
+
+describe("loadConfig", () => {
+  let tmpDir: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agora-config-test-"));
+    origCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(origCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("should return defaults when no .env or peers.json", async () => {
+    const { loadConfig, AGORA_HOME } = await import("./config.js");
+    const config = loadConfig();
+    expect(config.port).toBe(9470);
+    expect(config.host).toBe("0.0.0.0");
+    expect(config.storageDir).toBe(path.join(AGORA_HOME, "storage"));
+    expect(config.storagePeers).toEqual([]);
+  });
+
+  it("should read port, host, storageDir from .env", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, ".env"),
+      "AGORA_PORT=8080\nAGORA_HOST=127.0.0.1\nAGORA_STORAGE_DIR=/tmp/relay-store\n"
+    );
+    // Re-import to pick up new CWD
+    const { loadConfig } = await import("./config.js?port-host-dir");
+    const config = loadConfig();
+    expect(config.port).toBe(8080);
+    expect(config.host).toBe("127.0.0.1");
+    expect(config.storageDir).toBe("/tmp/relay-store");
+  });
+
+  it("should parse AGORA_STORAGE_PEERS from .env", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, ".env"),
+      "AGORA_STORAGE_PEERS=key1,key2,key3\n"
+    );
+    const { loadConfig } = await import("./config.js?peers-env");
+    const config = loadConfig();
+    expect(config.storagePeers).toEqual(["key1", "key2", "key3"]);
+  });
+
+  it("should load peers from peers.json when present", async () => {
+    const agoraHome = path.join(os.homedir(), ".agora-relay");
+    const peersFile = path.join(agoraHome, "peers.json");
+    const existed = fs.existsSync(peersFile);
+    const backup = existed ? fs.readFileSync(peersFile) : null;
+
+    try {
+      fs.mkdirSync(agoraHome, { recursive: true });
+      fs.writeFileSync(peersFile, JSON.stringify(["peerA", "peerB"]));
+      const { loadConfig } = await import("./config.js?peers-json");
+      const config = loadConfig();
+      expect(config.storagePeers).toContain("peerA");
+      expect(config.storagePeers).toContain("peerB");
+    } finally {
+      if (backup !== null) {
+        fs.writeFileSync(peersFile, backup);
+      } else if (fs.existsSync(peersFile)) {
+        fs.unlinkSync(peersFile);
+      }
+    }
+  });
+
+  it("should expand ~/ in AGORA_STORAGE_DIR", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, ".env"),
+      "AGORA_STORAGE_DIR=~/my-store\n"
+    );
+    const { loadConfig } = await import("./config.js?expand-home");
+    const config = loadConfig();
+    expect(config.storageDir).toBe(path.join(os.homedir(), "my-store"));
+  });
+
+  it("should ignore .env comment lines and blank lines", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, ".env"),
+      "# This is a comment\n\nAGORA_PORT=7777\n"
+    );
+    const { loadConfig } = await import("./config.js?comments");
+    const config = loadConfig();
+    expect(config.port).toBe(7777);
+  });
+
+  it("should strip surrounding quotes from .env values", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, ".env"),
+      'AGORA_HOST="192.168.1.1"\n'
+    );
+    const { loadConfig } = await import('./config.js?quotes');
+    const config = loadConfig();
+    expect(config.host).toBe("192.168.1.1");
   });
 });
