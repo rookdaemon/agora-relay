@@ -190,7 +190,7 @@ describe("Relay", () => {
     ws.close();
   });
 
-  it("should replace old connection when same pubkey registers again", async () => {
+  it("should allow multiple sessions for the same public key", async () => {
     const client1 = new WebSocket(`ws://localhost:${testPort}`);
     const client2 = new WebSocket(`ws://localhost:${testPort}`);
 
@@ -200,38 +200,174 @@ describe("Relay", () => {
     ]);
 
     // Register client1 with pubkey "duplicate"
-    const client1RegisterPromise = new Promise<void>((resolve) => {
+    const client1Registered = new Promise<any>((resolve) => {
       client1.on("message", (data) => {
         const msg = JSON.parse(data.toString());
-        if (msg.type === "registered") {
-          resolve();
-        }
+        if (msg.type === "registered") resolve(msg);
       });
     });
     client1.send(JSON.stringify({ type: "register", publicKey: "duplicate" }));
-    await client1RegisterPromise;
+    const msg1 = await client1Registered;
+    expect(msg1.sessionId).toBeTruthy();
 
-    // Client1 should be closed when client2 registers with same key
-    const client1ClosePromise = new Promise<void>((resolve) => {
-      client1.on("close", () => resolve());
-    });
-
-    // Register client2 with same pubkey "duplicate"
-    const client2RegisterPromise = new Promise<void>((resolve) => {
+    // Register client2 with the same pubkey - both should stay connected
+    const client2Registered = new Promise<any>((resolve) => {
       client2.on("message", (data) => {
         const msg = JSON.parse(data.toString());
-        if (msg.type === "registered") {
-          resolve();
-        }
+        if (msg.type === "registered") resolve(msg);
       });
     });
     client2.send(JSON.stringify({ type: "register", publicKey: "duplicate" }));
-    await client2RegisterPromise;
+    const msg2 = await client2Registered;
+    expect(msg2.sessionId).toBeTruthy();
 
-    // Client1 should have been closed
-    await client1ClosePromise;
+    // The two sessions should have different session IDs
+    expect(msg1.sessionId).not.toBe(msg2.sessionId);
 
+    // Both clients should still be open
+    expect(client1.readyState).toBe(WebSocket.OPEN);
+    expect(client2.readyState).toBe(WebSocket.OPEN);
+
+    client1.close();
     client2.close();
+  });
+
+  it("should deliver messages to all sessions of the recipient", async () => {
+    const sender = new WebSocket(`ws://localhost:${testPort}`);
+    const recipient1 = new WebSocket(`ws://localhost:${testPort}`);
+    const recipient2 = new WebSocket(`ws://localhost:${testPort}`);
+
+    await Promise.all([
+      new Promise<void>((resolve) => sender.on("open", resolve)),
+      new Promise<void>((resolve) => recipient1.on("open", resolve)),
+      new Promise<void>((resolve) => recipient2.on("open", resolve)),
+    ]);
+
+    // Register sender
+    const senderReady = new Promise<void>((resolve) => {
+      sender.on("message", (data) => {
+        if (JSON.parse(data.toString()).type === "registered") resolve();
+      });
+    });
+    sender.send(JSON.stringify({ type: "register", publicKey: "sender" }));
+    await senderReady;
+
+    // Register two sessions for "bob"
+    const r1Ready = new Promise<void>((resolve) => {
+      recipient1.on("message", (data) => {
+        if (JSON.parse(data.toString()).type === "registered") resolve();
+      });
+    });
+    recipient1.send(JSON.stringify({ type: "register", publicKey: "bob" }));
+    await r1Ready;
+
+    const r2Ready = new Promise<void>((resolve) => {
+      recipient2.on("message", (data) => {
+        if (JSON.parse(data.toString()).type === "registered") resolve();
+      });
+    });
+    recipient2.send(JSON.stringify({ type: "register", publicKey: "bob" }));
+    await r2Ready;
+
+    // Collect messages for each session
+    const r1Messages: any[] = [];
+    const r2Messages: any[] = [];
+    recipient1.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === "message") r1Messages.push(msg);
+    });
+    recipient2.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === "message") r2Messages.push(msg);
+    });
+
+    const envelope = { text: "hello all sessions" };
+    sender.send(JSON.stringify({ type: "message", to: "bob", envelope }));
+
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Both sessions should receive the message
+    expect(r1Messages).toHaveLength(1);
+    expect(r1Messages[0].envelope).toEqual(envelope);
+    expect(r2Messages).toHaveLength(1);
+    expect(r2Messages[0].envelope).toEqual(envelope);
+
+    sender.close();
+    recipient1.close();
+    recipient2.close();
+  });
+
+  it("should send peer_offline only when the last session disconnects", async () => {
+    const observer = new WebSocket(`ws://localhost:${testPort}`);
+    const session1 = new WebSocket(`ws://localhost:${testPort}`);
+    const session2 = new WebSocket(`ws://localhost:${testPort}`);
+
+    await Promise.all([
+      new Promise<void>((resolve) => observer.on("open", resolve)),
+      new Promise<void>((resolve) => session1.on("open", resolve)),
+      new Promise<void>((resolve) => session2.on("open", resolve)),
+    ]);
+
+    const observerReady = new Promise<void>((resolve) => {
+      observer.on("message", (data) => {
+        if (JSON.parse(data.toString()).type === "registered") resolve();
+      });
+    });
+    observer.send(JSON.stringify({ type: "register", publicKey: "observer" }));
+    await observerReady;
+
+    const s1Ready = new Promise<void>((resolve) => {
+      session1.on("message", (data) => {
+        if (JSON.parse(data.toString()).type === "registered") resolve();
+      });
+    });
+    session1.send(JSON.stringify({ type: "register", publicKey: "multi" }));
+    await s1Ready;
+
+    const s2Ready = new Promise<void>((resolve) => {
+      session2.on("message", (data) => {
+        if (JSON.parse(data.toString()).type === "registered") resolve();
+      });
+    });
+    session2.send(JSON.stringify({ type: "register", publicKey: "multi" }));
+    await s2Ready;
+
+    // Track events received by observer
+    const observerEvents: any[] = [];
+    observer.on("message", (data) => observerEvents.push(JSON.parse(data.toString())));
+
+    // Close first session — peer_offline should NOT be sent yet
+    session1.close();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(observerEvents.filter((m) => m.type === "peer_offline")).toHaveLength(0);
+
+    // Close second (last) session — peer_offline should now be sent
+    session2.close();
+    await new Promise((r) => setTimeout(r, 100));
+    const offlineEvents = observerEvents.filter((m) => m.type === "peer_offline");
+    expect(offlineEvents).toHaveLength(1);
+    expect(offlineEvents[0].publicKey).toBe("multi");
+
+    observer.close();
+  });
+
+  it("should include sessionId in the registered response", async () => {
+    const ws = new WebSocket(`ws://localhost:${testPort}`);
+    await new Promise<void>((resolve) => ws.on("open", resolve));
+
+    const registeredPromise = new Promise<any>((resolve) => {
+      ws.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === "registered") resolve(msg);
+      });
+    });
+    ws.send(JSON.stringify({ type: "register", publicKey: "session-test" }));
+
+    const registeredMsg = await registeredPromise;
+    expect(registeredMsg.sessionId).toBeTruthy();
+    expect(typeof registeredMsg.sessionId).toBe("string");
+
+    ws.close();
   });
 
   it("should emit disconnection event when client disconnects", async () => {
@@ -546,6 +682,71 @@ describe("Relay with file-backed storage", () => {
     expect(offlineEvents).toHaveLength(0);
 
     bob.close();
+  });
+
+  it("should not queue message for storage-enabled peer when a session is active", async () => {
+    // alice (storage peer) is connected with one session
+    const alice = new WebSocket(`ws://localhost:${testPort}`);
+    const sender = new WebSocket(`ws://localhost:${testPort}`);
+    await Promise.all([
+      new Promise<void>((resolve) => alice.on("open", resolve)),
+      new Promise<void>((resolve) => sender.on("open", resolve)),
+    ]);
+
+    const aliceReady = new Promise<void>((resolve) => {
+      alice.on("message", (data) => {
+        if (JSON.parse(data.toString()).type === "registered") resolve();
+      });
+    });
+    alice.send(JSON.stringify({ type: "register", publicKey: "alice" }));
+    await aliceReady;
+
+    const senderReady = new Promise<void>((resolve) => {
+      sender.on("message", (data) => {
+        if (JSON.parse(data.toString()).type === "registered") resolve();
+      });
+    });
+    sender.send(JSON.stringify({ type: "register", publicKey: "bob" }));
+    await senderReady;
+
+    // alice is online — message should be forwarded directly (not stored)
+    const aliceMessages: any[] = [];
+    alice.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === "message") aliceMessages.push(msg);
+    });
+
+    const envelope = { text: "direct delivery" };
+    sender.send(JSON.stringify({ type: "message", to: "alice", envelope }));
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(aliceMessages).toHaveLength(1);
+    expect(aliceMessages[0].envelope).toEqual(envelope);
+
+    // Disconnect alice and re-connect — no stored messages should be delivered
+    alice.close();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const alice2 = new WebSocket(`ws://localhost:${testPort}`);
+    await new Promise<void>((resolve) => alice2.on("open", resolve));
+
+    const alice2Messages: any[] = [];
+    const alice2Ready = new Promise<void>((resolve) => {
+      alice2.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        alice2Messages.push(msg);
+        if (msg.type === "registered") resolve();
+      });
+    });
+    alice2.send(JSON.stringify({ type: "register", publicKey: "alice" }));
+    await alice2Ready;
+
+    await new Promise((r) => setTimeout(r, 100));
+    const delivered = alice2Messages.filter((m) => m.type === "message");
+    expect(delivered).toHaveLength(0);
+
+    sender.close();
+    alice2.close();
   });
 
   it("should still return error for non-storage-enabled offline peers", async () => {
