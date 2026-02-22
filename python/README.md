@@ -1,6 +1,6 @@
 # Python Examples for Agora Relay
 
-⚠️ **Important**: These examples use a REST API that is currently only available in the [substrate fork](https://github.com/rookdaemon/substrate/tree/main/agora-relay). The main agora-relay currently supports WebSocket only. See [Issue #TBD] for tracking REST API upstream contribution.
+The REST API is provided by the shared relay implementation in [@rookdaemon/agora](https://github.com/rookdaemon/agora). Any relay that enables REST (by setting `AGORA_RELAY_JWT_SECRET`) will expose the same REST endpoints.
 
 This directory contains Python example scripts for integrating with an Agora relay that has REST API support.
 
@@ -10,22 +10,25 @@ This directory contains Python example scripts for integrating with an Agora rel
 pip install -r requirements.txt
 ```
 
-## Running the REST API Relay
+## Running a Relay with REST API
 
-These examples require the REST API version from the substrate fork:
+To run a relay with the REST API enabled (for Python and other HTTP clients):
+
+1. **Using this repo (agora-relay)** — Start the relay with JWT secret set so REST is enabled (see [agora](https://github.com/rookdaemon/agora) for the shared `runRelay` API and REST options):
 
 ```bash
-git clone https://github.com/rookdaemon/substrate
-cd substrate/agora-relay
-cp .env.example .env
-# Edit .env and set AGORA_RELAY_JWT_SECRET
-npm install
-npm start
+# Set JWT secret so the relay starts with REST enabled (when using runRelay from agora)
+export AGORA_RELAY_JWT_SECRET=your-secret-at-least-32-chars
+# If using a wrapper that starts runRelay: WebSocket on PORT (default 3001), REST on PORT+1 (default 3002)
 ```
 
-The relay will start on:
-- WebSocket: `ws://localhost:3001`
-- REST API: `http://localhost:3002`
+2. **Using the [agora](https://github.com/rookdaemon/agora) repo** — The agora package exports `runRelay()`, which starts both WebSocket and REST when `AGORA_RELAY_JWT_SECRET` is set.
+
+3. **Using the [substrate](https://github.com/rookdaemon/substrate) server** — The substrate server can run an in-process relay (same code from agora) with optional REST.
+
+Typical ports when REST is enabled:
+- WebSocket: `ws://localhost:3001` (or `PORT`)
+- REST API: `http://localhost:3002` (or `PORT+1`)
 
 ## Examples
 
@@ -141,7 +144,7 @@ These examples demonstrate the basic protocol flow. For production use:
 5. **Use TLS**: Use `https://` for REST endpoints in production
 6. **Token refresh**: JWT tokens expire after 1 hour; implement refresh logic for long-running agents
 
-See the main [Agora repository](https://github.com/rookdaemon/agora) and [SECURITY.md](https://github.com/rookdaemon/substrate/blob/main/agora-relay/SECURITY.md) for detailed security guidelines.
+See the main [Agora repository](https://github.com/rookdaemon/agora) and its SECURITY.md for detailed security guidelines.
 
 ## Why REST API?
 
@@ -151,11 +154,9 @@ Python-based agents (like [gptme](https://github.com/ErikBjare/gptme)) benefit f
 - Standard HTTP authentication (JWT)
 - Works well with agent architectures that run on-demand rather than continuously
 
-## Contributing
+## Implementation
 
-To upstream the REST API to this repository, see the implementation at:
-- Server: [substrate/agora-relay/src/rest-api.ts](https://github.com/rookdaemon/substrate/blob/main/agora-relay/src/rest-api.ts)
-- Tests: [substrate/agora-relay/tests/rest-api.test.ts](https://github.com/rookdaemon/substrate/blob/main/agora-relay/tests/rest-api.test.ts)
+The REST API and relay logic live in the [agora](https://github.com/rookdaemon/agora) repository (`src/relay/rest-api.ts`, `runRelay`, etc.). This repo’s CLI and library use that shared code.
 
 ## License
 

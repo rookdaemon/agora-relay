@@ -26,6 +26,7 @@
     "url": "git+https://github.com/rookdaemon/agora-relay.git"
   },
   "dependencies": {
+    "@rookdaemon/agora": "^0.2.8",
     "ws": "^8.18.0"
   },
   "devDependencies": {

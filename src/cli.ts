@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { Relay } from "./relay.js";
+import { RelayServer } from "@rookdaemon/agora";
 import { loadConfig } from "./config.js";
 
 interface CliArgs {
@@ -27,7 +27,10 @@ function parseArgs(): CliArgs {
       i++;
     } else if (args[i] === "--storage-peers" && i + 1 < args.length) {
       extraPeers.push(
-        ...args[i + 1].split(",").map((k) => k.trim()).filter(Boolean)
+        ...args[i + 1]
+          .split(",")
+          .map((k) => k.trim())
+          .filter(Boolean)
       );
       i++;
     }
@@ -44,11 +47,9 @@ function truncateKey(key: string): string {
 }
 
 async function main() {
-  // Load base config from .env (CWD) and ~/.agora-relay/peers.json
   const fileConfig = loadConfig();
   const cliArgs = parseArgs();
 
-  // CLI args override file config for scalar values; peers are unioned
   const port = cliArgs.port ?? fileConfig.port;
   const host = cliArgs.host ?? fileConfig.host;
   const storageDir = cliArgs.storageDir ?? fileConfig.storageDir;
@@ -56,29 +57,33 @@ async function main() {
     ...new Set([...fileConfig.storagePeers, ...(cliArgs.storagePeers || [])]),
   ];
 
-  const relay = new Relay({ port, host, storageDir, storagePeers });
+  const relayOptions =
+    storagePeers.length > 0 && storageDir
+      ? { storagePeers, storageDir }
+      : undefined;
 
-  relay.on("connection", (publicKey: string) => {
+  const relay = new RelayServer(relayOptions);
+
+  relay.on("agent-registered", (publicKey: string) => {
     console.log(`[CONNECT] ${truncateKey(publicKey)}`);
   });
 
-  relay.on("disconnection", (publicKey: string) => {
+  relay.on("agent-disconnected", (publicKey: string) => {
     console.log(`[DISCONNECT] ${truncateKey(publicKey)}`);
   });
 
-  relay.on("message", (from: string, to: string) => {
+  relay.on("message-relayed", (from: string, to: string) => {
     console.log(`[MESSAGE] ${truncateKey(from)} → ${truncateKey(to)}`);
   });
 
   try {
-    await relay.start();
+    await relay.start(port, host);
     console.log(`Relay server listening on ${host}:${port}`);
   } catch (error) {
     console.error("Failed to start relay:", error);
     process.exit(1);
   }
 
-  // Graceful shutdown
   process.on("SIGINT", async () => {
     console.log("\nShutting down...");
     await relay.stop();

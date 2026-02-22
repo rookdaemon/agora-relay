@@ -31,15 +31,16 @@ agora-relay --port 9470 --storage-peers "pubkeyA,pubkeyB" --storage-dir /var/lib
 Or programmatically:
 
 ```ts
-import { Relay } from "@rookdaemon/agora-relay";
+import { RelayServer } from "@rookdaemon/agora-relay";
 
-const relay = new Relay({
-  port: 9470,
+const relay = new RelayServer({
   storagePeers: ["pubkeyA", "pubkeyB"],
   storageDir: "/var/lib/agora-relay/messages",
 });
-await relay.start();
+await relay.start(9470, "0.0.0.0");
 ```
+
+This package uses the shared relay implementation from [@rookdaemon/agora](https://github.com/rookdaemon/agora); the same code runs in the standalone CLI and in other deployables (e.g. substrate server).
 
 ## Configuration
 
