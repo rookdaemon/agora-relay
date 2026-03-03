@@ -7,6 +7,11 @@ export interface Config {
   host: string;
   storageDir: string;
   storagePeers: string[];
+  rateLimitEnabled: boolean;
+  rateLimitMaxMessages: number;
+  rateLimitWindowMs: number;
+  dedupEnabled: boolean;
+  dedupMaxEnvelopeIds: number;
 }
 
 /** Default path for the agora-relay home directory */
@@ -15,6 +20,21 @@ export const AGORA_HOME = path.join(os.homedir(), ".agora-relay");
 function expandHome(p: string): string {
   if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
   return p;
+}
+
+function parseBoolean(value: string | undefined, defaultValue: boolean): boolean {
+  if (value === undefined) return defaultValue;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return defaultValue;
+}
+
+function parsePositiveInt(value: string | undefined, defaultValue: number): number {
+  if (!value) return defaultValue;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return defaultValue;
+  return parsed;
 }
 
 /** Parse a .env file into a key-value map. Lines starting with # are ignored. */
@@ -78,5 +98,10 @@ export function loadConfig(): Config {
     host: env["AGORA_HOST"] || "0.0.0.0",
     storageDir: rawStorageDir ? expandHome(rawStorageDir) : defaultStorageDir,
     storagePeers: [...new Set([...peersFromFile, ...peersFromEnv])],
+    rateLimitEnabled: parseBoolean(env["AGORA_RATE_LIMIT_ENABLED"], true),
+    rateLimitMaxMessages: parsePositiveInt(env["AGORA_RATE_LIMIT_MAX_MESSAGES"], 10),
+    rateLimitWindowMs: parsePositiveInt(env["AGORA_RATE_LIMIT_WINDOW_MS"], 60000),
+    dedupEnabled: parseBoolean(env["AGORA_DEDUP_ENABLED"], true),
+    dedupMaxEnvelopeIds: parsePositiveInt(env["AGORA_DEDUP_MAX_ENVELOPE_IDS"], 1000),
   };
 }
