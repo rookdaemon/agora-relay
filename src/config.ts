@@ -80,9 +80,9 @@ function loadPeersJson(filePath: string): string[] {
  * Load configuration from .env (CWD) and ~/.agora-relay/peers.json.
  * Returns defaults when neither source is present.
  */
-export function loadConfig(): Config {
+export function loadConfig(agoraHome: string = AGORA_HOME): Config {
   const env = parseEnvFile(path.join(process.cwd(), ".env"));
-  const peersFromFile = loadPeersJson(path.join(AGORA_HOME, "peers.json"));
+  const peersFromFile = loadPeersJson(path.join(agoraHome, "peers.json"));
   const peersFromEnv = (env["AGORA_STORAGE_PEERS"] || "")
     .split(",")
     .map((k) => k.trim())

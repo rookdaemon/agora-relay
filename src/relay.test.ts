@@ -512,7 +512,7 @@ describe("loadConfig", () => {
 
   it("should return defaults when no .env or peers.json", async () => {
     const { loadConfig, AGORA_HOME } = await import("./config.js");
-    const config = loadConfig();
+    const config = loadConfig(tmpDir);
     expect(config.port).toBe(9470);
     expect(config.host).toBe("0.0.0.0");
     expect(config.storageDir).toBe(path.join(AGORA_HOME, "storage"));
@@ -538,7 +538,7 @@ describe("loadConfig", () => {
       "AGORA_STORAGE_PEERS=key1,key2,key3\n"
     );
     const { loadConfig } = await import("./config.js?peers-env");
-    const config = loadConfig();
+    const config = loadConfig(tmpDir);
     expect(config.storagePeers).toEqual(["key1", "key2", "key3"]);
   });
 
