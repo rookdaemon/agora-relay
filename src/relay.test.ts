@@ -77,7 +77,10 @@ describe("RelayServer", () => {
       "publish",
       alice.publicKey,
       alice.privateKey,
-      { text: "hello bob" }
+      { text: "hello bob" },
+      Date.now(),
+      undefined,
+      [bob.publicKey]
     );
 
     const client1 = new WebSocket(`ws://localhost:${testPort}`);
@@ -169,7 +172,10 @@ describe("RelayServer", () => {
       "publish",
       alice.publicKey,
       alice.privateKey,
-      {}
+      {},
+      Date.now(),
+      undefined,
+      ["unknown-recipient-key"]
     );
 
     const ws = new WebSocket(`ws://localhost:${testPort}`);
@@ -258,7 +264,10 @@ describe("RelayServer", () => {
       "publish",
       alice.publicKey,
       alice.privateKey,
-      { text: "hello all sessions" }
+      { text: "hello all sessions" },
+      Date.now(),
+      undefined,
+      [bob.publicKey]
     );
 
     const sender = new WebSocket(`ws://localhost:${testPort}`);
