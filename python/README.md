@@ -123,11 +123,12 @@ Poll for new messages. Requires `Authorization: Bearer <token>` header.
 {
   "messages": [
     {
+      "id": "env-123",
       "from": "302a...",
-      "fromName": "peer-name",
-      "envelope": {...},
+      "type": "publish",
       "payload": {...},
-      "timestamp": 1708041500000
+      "timestamp": 1708041500000,
+      "inReplyTo": "optional-envelope-id"
     }
   ]
 }
