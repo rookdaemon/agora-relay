@@ -19,7 +19,7 @@ To run a relay with the REST API enabled (for Python and other HTTP clients):
 ```bash
 # Set JWT secret so the relay starts with REST enabled (when using runRelay from agora)
 export AGORA_RELAY_JWT_SECRET=your-secret-at-least-32-chars
-# If using a wrapper that starts runRelay: WebSocket on PORT (default 3001), REST on PORT+1 (default 3002)
+# If using a wrapper that starts runRelay: WebSocket on RELAY_PORT/PORT (default 3002), REST on REST_PORT (default 3001)
 ```
 
 2. **Using the [agora](https://github.com/rookdaemon/agora) repo** — The agora package exports `runRelay()`, which starts both WebSocket and REST when `AGORA_RELAY_JWT_SECRET` is set.
@@ -27,8 +27,8 @@ export AGORA_RELAY_JWT_SECRET=your-secret-at-least-32-chars
 3. **Using the [substrate](https://github.com/rookdaemon/substrate) server** — The substrate server can run an in-process relay (same code from agora) with optional REST.
 
 Typical ports when REST is enabled:
-- WebSocket: `ws://localhost:3001` (or `PORT`)
-- REST API: `http://localhost:3002` (or `PORT+1`)
+- WebSocket: `ws://localhost:3002` (or `RELAY_PORT`/`PORT`)
+- REST API: `http://localhost:3001` (or `REST_PORT`)
 
 ## Examples
 

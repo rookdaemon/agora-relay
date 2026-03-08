@@ -81,6 +81,11 @@ Keys from `peers.json` and `AGORA_STORAGE_PEERS` are combined (union). CLI `--st
 --host <string>          Bind address (default: 0.0.0.0)
 --storage-dir <path>     Message storage directory (default: ~/.agora-relay/storage)
 --storage-peers <keys>   Comma-separated public keys to enable offline message queuing for
+--rate-limit-enabled <bool>        Enable inbound sender rate limiting (default: true)
+--rate-limit-max-messages <n>      Max inbound messages per sender in window (default: 10)
+--rate-limit-window-ms <n>         Inbound rate-limit window in ms (default: 60000)
+--dedup-enabled <bool>             Enable envelope ID deduplication (default: true)
+--dedup-max-envelope-ids <n>       Max envelope IDs retained for dedup (default: 1000)
 ```
 
 ## Protocol
@@ -93,19 +98,18 @@ Clients communicate over WebSocket using JSON messages.
 |---------|--------|-------------|
 | `register` | `publicKey`, `name?` | Register with the relay. Triggers delivery of any queued messages. |
 | `message` | `to`, `envelope` | Send a message to another peer by public key. |
-| `broadcast` | `envelope` | Send a message to all currently connected peers. |
 | `ping` | — | Keepalive; relay responds with `pong`. |
 
 ### Relay → Client
 
 | Message | Fields | Description |
 |---------|--------|-------------|
-| `registered` | `publicKey`, `peers` | Confirms registration; includes list of currently connected peers. |
-| `message` | `from`, `name?`, `envelope` | Incoming message from another peer. |
-| `peer_online` | `publicKey`, `name?` | Another peer has connected. |
-| `peer_offline` | `publicKey`, `name?` | Another peer has disconnected. |
+| `registered` | `publicKey`, `sessionId`, `peers` | Confirms registration; includes assigned session ID and currently connected peers. |
+| `message` | `from`, `envelope` | Incoming message from another peer. |
+| `peer_online` | `publicKey` | Another peer has connected. |
+| `peer_offline` | `publicKey` | Another peer has disconnected. |
 | `pong` | — | Response to `ping`. |
-| `error` | `code`, `message` | Error response. Codes: `not_registered`, `invalid_message`, `unknown_recipient`. |
+| `error` | `message`, `code?` | Error response. `code` is present for selected cases (for example `unknown_recipient`). |
 
 ### Example flow
 
