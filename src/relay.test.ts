@@ -5,6 +5,7 @@ import {
   generateKeyPair,
   createEnvelope,
 } from "@rookdaemon/agora";
+import { PersistentMessageBuffer } from "./persistent-buffer.js";
 import WebSocket from "ws";
 import * as fs from "fs";
 import * as os from "os";
@@ -501,6 +502,88 @@ describe("MessageStore", () => {
     expect(messages).toHaveLength(2);
     expect((messages[0].envelope as any).seq).toBe(1);
     expect((messages[1].envelope as any).seq).toBe(2);
+  });
+});
+
+describe("PersistentMessageBuffer", () => {
+  let storageDir: string;
+
+  beforeEach(() => {
+    storageDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agora-pbuffer-test-")
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(storageDir, { recursive: true, force: true });
+  });
+
+  it("should return empty array for a new recipient", () => {
+    const buf = new PersistentMessageBuffer(storageDir);
+    expect(buf.get("alice")).toEqual([]);
+  });
+
+  it("should persist messages to disk and reload on re-instantiation", () => {
+    const msg = { id: "m1", from: "bob", type: "publish", payload: { text: "hi" }, timestamp: 1000 };
+    const buf1 = new PersistentMessageBuffer(storageDir);
+    buf1.add("alice", msg);
+
+    const buf2 = new PersistentMessageBuffer(storageDir);
+    const loaded = buf2.get("alice");
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]).toEqual(msg);
+  });
+
+  it("should filter messages by since timestamp", () => {
+    const buf = new PersistentMessageBuffer(storageDir);
+    buf.add("alice", { id: "m1", from: "bob", type: "publish", payload: {}, timestamp: 100 });
+    buf.add("alice", { id: "m2", from: "bob", type: "publish", payload: {}, timestamp: 200 });
+    buf.add("alice", { id: "m3", from: "bob", type: "publish", payload: {}, timestamp: 300 });
+
+    const result = buf.get("alice", 150);
+    expect(result).toHaveLength(2);
+    expect(result[0].id).toBe("m2");
+    expect(result[1].id).toBe("m3");
+  });
+
+  it("should clear stored messages for a recipient", () => {
+    const buf = new PersistentMessageBuffer(storageDir);
+    buf.add("alice", { id: "m1", from: "bob", type: "publish", payload: {}, timestamp: 1000 });
+    buf.clear("alice");
+    expect(buf.get("alice")).toEqual([]);
+  });
+
+  it("should delete all state for a recipient", () => {
+    const buf = new PersistentMessageBuffer(storageDir);
+    buf.add("alice", { id: "m1", from: "bob", type: "publish", payload: {}, timestamp: 1000 });
+    buf.delete("alice");
+    const buf2 = new PersistentMessageBuffer(storageDir);
+    expect(buf2.get("alice")).toEqual([]);
+  });
+
+  it("should evict the oldest message when at capacity", () => {
+    const buf = new PersistentMessageBuffer(storageDir);
+    for (let i = 1; i <= 101; i++) {
+      buf.add("alice", { id: `m${i}`, from: "bob", type: "publish", payload: {}, timestamp: i });
+    }
+    const messages = buf.get("alice");
+    expect(messages).toHaveLength(100);
+    expect(messages[0].id).toBe("m2");
+    expect(messages[99].id).toBe("m101");
+  });
+
+  it("should prune expired messages on get", () => {
+    let fakeNow = 1_000_000;
+    const buf = new PersistentMessageBuffer(storageDir, {
+      ttlMs: 1000,
+      now: () => fakeNow,
+    });
+    buf.add("alice", { id: "m1", from: "bob", type: "publish", payload: {}, timestamp: 1000 });
+
+    // Advance clock past TTL
+    fakeNow += 1001;
+    const messages = buf.get("alice");
+    expect(messages).toHaveLength(0);
   });
 });
 
