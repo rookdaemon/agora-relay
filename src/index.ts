@@ -16,3 +16,4 @@ export {
 } from "@rookdaemon/agora";
 
 export { loadConfig, Config, AGORA_HOME } from "./config.js";
+export { PersistentMessageBuffer } from "./persistent-buffer.js";
